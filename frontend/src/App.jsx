@@ -4,11 +4,27 @@ import {
   CalendarDays, Handshake, Bell, Settings, Search,
   ChevronDown, Plus, ArrowUpRight, CheckCircle2,
   TrendingUp, MoreHorizontal, Filter, Menu, X,
-  RefreshCw, Wifi, WifiOff
+  RefreshCw, Wifi, WifiOff, Download, History,
+  BarChart3, FileSpreadsheet, ShieldCheck, Award, Sparkles, Clock
 } from "lucide-react";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+  PieChart,
+  Pie,
+  Cell,
+  CartesianGrid,
+  AreaChart,
+  Area,
+} from "recharts";
 import "./App.css";
 
-const API = "http://localhost:8000";
+const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 const navigation = [
   {
@@ -25,6 +41,8 @@ const navigation = [
     items: [
       { label: "Interviews", icon: CalendarDays },
       { label: "Offers & Hiring", icon: Handshake },
+      { label: "Reports", icon: BarChart3 },
+      { label: "Activity Log", icon: History },
       { label: "Notifications", icon: Bell },
     ],
   },
@@ -64,6 +82,50 @@ function formatDate(value) {
         year: "numeric",
         timeZone: "UTC",
       });
+}
+
+function formatDateTime(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString("en-US", {
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function exportToCSV(data, filename = "export.csv") {
+  if (!data || !data.length) {
+    alert("No records available to export.");
+    return;
+  }
+  const headers = Object.keys(data[0]);
+  const csvRows = [
+    headers.join(","),
+    ...data.map(row =>
+      headers
+        .map(field => {
+          const val = row[field] ?? "";
+          const stringified = typeof val === "object" ? JSON.stringify(val) : String(val);
+          return `"${stringified.replace(/"/g, '""')}"`;
+        })
+        .join(",")
+    ),
+  ];
+  const blob = new Blob(["\uFEFF" + csvRows.join("\r\n")], {
+    type: "text/csv;charset=utf-8;",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.setAttribute("download", filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 async function apiRequest(path, options = {}) {
@@ -347,21 +409,29 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(null);
   const [error, setError] = useState("");
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [auditFilter, setAuditFilter] = useState("All");
+  const [auditSearch, setAuditSearch] = useState("");
 
   const loadData = useCallback(async () => {
     setLoading(true);
     setError("");
 
     try {
-      const [jobsData, candidatesData, statsData] = await Promise.all([
+      const [jobsData, candidatesData, statsData, logsData] = await Promise.all([
         apiRequest("/jobs"),
         apiRequest("/candidates"),
         apiRequest("/dashboard/stats"),
+        apiRequest("/audit-logs").catch(err => {
+          console.warn("Could not load audit logs:", err);
+          return [];
+        }),
       ]);
 
       setJobs(jobsData);
       setCandidates(candidatesData);
       setStats(statsData);
+      setAuditLogs(Array.isArray(logsData) ? logsData : []);
       setApiConnected(true);
     } catch (err) {
       console.error("Could not load recruitment data:", err);
@@ -373,6 +443,64 @@ export default function App() {
       setLoading(false);
     }
   }, []);
+
+  const handleExportCandidates = () => {
+    const dataToExport = filteredCandidates.map(c => ({
+      ID: c.id,
+      Name: c.name,
+      Role: c.role,
+      Email: c.email || "N/A",
+      Experience: c.experience,
+      "AI Match Score (%)": `${c.score}%`,
+      Status: c.status,
+      "Applied On": c.applied_on || c.date || "N/A",
+    }));
+    exportToCSV(dataToExport, `talentflow_candidates_${new Date().toISOString().slice(0, 10)}.csv`);
+  };
+
+  const handleExportJobs = () => {
+    const dataToExport = filteredJobs.map(j => ({
+      ID: j.id,
+      "Job Title": j.title,
+      Department: j.department,
+      "Employment Type": j.job_type || j.type || "Full-time",
+      "Applicants Count": j.applicants ?? 0,
+      Status: j.status,
+      "Created At": j.created_at || "N/A",
+    }));
+    exportToCSV(dataToExport, `talentflow_jobs_${new Date().toISOString().slice(0, 10)}.csv`);
+  };
+
+  const handleExportAuditLogs = () => {
+    const dataToExport = auditLogs.map(l => ({
+      ID: l.id,
+      Action: l.action,
+      "Entity Type": l.entity_type,
+      "Entity ID": l.entity_id ?? "—",
+      Details: l.details,
+      "Timestamp": l.created_at,
+    }));
+    exportToCSV(dataToExport, `talentflow_audit_trail_${new Date().toISOString().slice(0, 10)}.csv`);
+  };
+
+  const handleExportAnalytics = () => {
+    const stageSummary = statusOptions.map(st => ({
+      Metric: `Candidates in ${st}`,
+      Value: candidates.filter(c => c.status === st).length,
+    }));
+    const avgScore = candidates.length
+      ? Math.round(candidates.reduce((a, b) => a + (b.score || 0), 0) / candidates.length)
+      : 0;
+    const dataToExport = [
+      { Metric: "Total Candidates", Value: candidates.length },
+      { Metric: "Active Jobs", Value: stats.active_jobs },
+      { Metric: "Interviews Scheduled", Value: stats.interviews_scheduled },
+      { Metric: "Offers Accepted (Hired)", Value: stats.offers_accepted },
+      { Metric: "Average AI Match Score", Value: `${avgScore}%` },
+      ...stageSummary,
+    ];
+    exportToCSV(dataToExport, `talentflow_recruitment_analytics_${new Date().toISOString().slice(0, 10)}.csv`);
+  };
 
   useEffect(() => {
     loadData();
@@ -445,6 +573,52 @@ export default function App() {
   const hiringCandidates = candidates.filter(
     candidate => ["Shortlisted", "Interview", "Hired"].includes(candidate.status)
   );
+
+  const stageAnalytics = [
+    { stage: "Applied", count: candidates.filter(c => c.status === "Applied").length, fill: "#8b83f6" },
+    { stage: "Screening", count: candidates.filter(c => c.status === "Screening").length, fill: "#5b9cf5" },
+    { stage: "Shortlisted", count: candidates.filter(c => c.status === "Shortlisted").length, fill: "#43b99a" },
+    { stage: "Interview", count: candidates.filter(c => c.status === "Interview").length, fill: "#eeaa55" },
+    { stage: "Hired", count: candidates.filter(c => c.status === "Hired").length, fill: "#46b77d" },
+    { stage: "Rejected", count: candidates.filter(c => c.status === "Rejected").length, fill: "#ef4444" },
+  ];
+
+  const departmentCounts = jobs.reduce((acc, job) => {
+    const dept = job.department || "Other";
+    acc[dept] = (acc[dept] || 0) + (job.applicants || 0);
+    return acc;
+  }, {});
+  const departmentData = Object.keys(departmentCounts).length
+    ? Object.entries(departmentCounts).map(([name, value]) => ({ name, value }))
+    : [
+        { name: "Engineering", value: 48 },
+        { name: "AI & Data", value: 36 },
+        { name: "Design", value: 24 },
+      ];
+  const pieColors = ["#6258e8", "#5b9cf5", "#43b99a", "#eeaa55", "#ec4899", "#8b5cf6"];
+
+  const scoreTiersData = [
+    { tier: "90-100% (Top)", candidates: candidates.filter(c => c.score >= 90).length },
+    { tier: "80-89% (High)", candidates: candidates.filter(c => c.score >= 80 && c.score < 90).length },
+    { tier: "70-79% (Moderate)", candidates: candidates.filter(c => c.score >= 70 && c.score < 80).length },
+    { tier: "< 70% (Review)", candidates: candidates.filter(c => c.score < 70).length },
+  ];
+
+  const avgScore = candidates.length
+    ? Math.round(candidates.reduce((sum, c) => sum + (c.score || 0), 0) / candidates.length)
+    : 0;
+
+  const hireRate = candidates.length
+    ? Math.round((candidates.filter(c => c.status === "Hired").length / candidates.length) * 100)
+    : 0;
+
+  const filteredAuditLogs = auditLogs
+    .filter(log => auditFilter === "All" || log.action === auditFilter)
+    .filter(log =>
+      `${log.action} ${log.entity_type} ${log.details}`
+        .toLowerCase()
+        .includes(auditSearch.toLowerCase())
+    );
 
   return (
     <div className="app-shell">
@@ -553,12 +727,17 @@ export default function App() {
                       <h2>Recent candidates</h2>
                       <p>Review applicants and their current screening scores.</p>
                     </div>
-                    <button
-                      className="subtle-button"
-                      onClick={() => setActive("Candidates")}
-                    >
-                      View all <ArrowUpRight size={15} />
-                    </button>
+                    <div className="panel-actions">
+                      <button className="subtle-button" onClick={handleExportCandidates} title="Export candidates to CSV">
+                        <Download size={14} /> Export CSV
+                      </button>
+                      <button
+                        className="subtle-button"
+                        onClick={() => setActive("Candidates")}
+                      >
+                        View all <ArrowUpRight size={15} />
+                      </button>
+                    </div>
                   </div>
                   <CandidateTable
                     candidates={filteredCandidates.slice(0, 5)}
@@ -652,9 +831,14 @@ export default function App() {
                   <h2>Job postings</h2>
                   <p>Manage open roles and recruitment requirements.</p>
                 </div>
-                <button className="subtle-button" onClick={loadData}>
-                  <RefreshCw size={15} /> Refresh
-                </button>
+                <div className="panel-actions">
+                  <button className="subtle-button" onClick={handleExportJobs} title="Export jobs to CSV">
+                    <Download size={14} /> Export CSV
+                  </button>
+                  <button className="subtle-button" onClick={loadData}>
+                    <RefreshCw size={15} /> Refresh
+                  </button>
+                </div>
               </div>
               <JobList jobs={filteredJobs} />
             </section>
@@ -667,9 +851,14 @@ export default function App() {
                   <h2>{active === "Candidates" ? "Candidate directory" : "Application pipeline"}</h2>
                   <p>Search candidates and save recruitment-stage updates.</p>
                 </div>
-                <button className="subtle-button" onClick={loadData}>
-                  <RefreshCw size={15} /> Refresh
-                </button>
+                <div className="panel-actions">
+                  <button className="subtle-button" onClick={handleExportCandidates} title="Export candidates to CSV">
+                    <Download size={14} /> Export CSV
+                  </button>
+                  <button className="subtle-button" onClick={loadData}>
+                    <RefreshCw size={15} /> Refresh
+                  </button>
+                </div>
               </div>
               <CandidateTable
                 candidates={filteredCandidates}
@@ -686,7 +875,12 @@ export default function App() {
                   <h2>Interview schedule</h2>
                   <p>Candidates currently in the interview stage.</p>
                 </div>
-                <CalendarDays size={22} />
+                <div className="panel-actions">
+                  <button className="subtle-button" onClick={handleExportCandidates} title="Export interview candidates">
+                    <Download size={14} /> Export CSV
+                  </button>
+                  <CalendarDays size={22} />
+                </div>
               </div>
               {interviewCandidates.length ? (
                 <CandidateTable
@@ -707,12 +901,97 @@ export default function App() {
                   <h2>Offers & hiring</h2>
                   <p>Track shortlisted candidates and hiring outcomes.</p>
                 </div>
+                <button className="subtle-button" onClick={handleExportCandidates} title="Export hiring pipeline">
+                  <Download size={14} /> Export CSV
+                </button>
               </div>
               <CandidateTable
                 candidates={hiringCandidates}
                 onStatus={updateStatus}
                 busyId={busyId}
               />
+            </section>
+          )}
+
+          {active === "Activity Log" && (
+            <section className="panel full-panel">
+              <div className="panel-header">
+                <div>
+                  <h2>Recruitment Audit Trail</h2>
+                  <p>Chronological activity log of recruitment actions and pipeline changes.</p>
+                </div>
+                <div className="panel-actions">
+                  <button className="subtle-button" onClick={handleExportAuditLogs} title="Export audit trail to CSV">
+                    <Download size={14} /> Export CSV
+                  </button>
+                  <button className="subtle-button" onClick={loadData}>
+                    <RefreshCw size={15} /> Refresh
+                  </button>
+                </div>
+              </div>
+
+              <div className="audit-controls">
+                <div className="filter-chips">
+                  {[
+                    { key: "All", label: "All Events" },
+                    { key: "candidate_status_updated", label: "Candidate Updates" },
+                    { key: "job_created", label: "Job Postings" },
+                  ].map(({ key, label }) => (
+                    <button
+                      key={key}
+                      className={`filter-chip ${auditFilter === key ? "active" : ""}`}
+                      onClick={() => setAuditFilter(key)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <label className="audit-search-box">
+                  <Search size={15} />
+                  <input
+                    value={auditSearch}
+                    onChange={e => setAuditSearch(e.target.value)}
+                    placeholder="Search audit trail..."
+                  />
+                </label>
+              </div>
+
+              {filteredAuditLogs.length === 0 ? (
+                <div className="empty-state">No activity log entries found matching your filter.</div>
+              ) : (
+                <div className="audit-timeline">
+                  {filteredAuditLogs.map(log => {
+                    const isCandidate = log.entity_type === "candidate";
+                    const isJob = log.entity_type === "job";
+                    return (
+                      <div className="audit-card" key={log.id}>
+                        <div className={`audit-icon ${isCandidate ? "purple" : isJob ? "blue" : "green"}`}>
+                          {isCandidate ? <Users size={17} /> : isJob ? <BriefcaseBusiness size={17} /> : <ShieldCheck size={17} />}
+                        </div>
+                        <div className="audit-content">
+                          <div className="audit-title-row">
+                            <strong>
+                              {log.action === "candidate_status_updated"
+                                ? "Candidate Status Updated"
+                                : log.action === "job_created"
+                                ? "Job Opening Created"
+                                : log.action.replace(/_/g, " ").toUpperCase()}
+                            </strong>
+                            <span className="audit-badge">
+                              {log.entity_type.toUpperCase()} #{log.entity_id ?? log.id}
+                            </span>
+                          </div>
+                          <p className="audit-details">{log.details}</p>
+                          <div className="audit-meta">
+                            <Clock size={12} />
+                            <span>{formatDateTime(log.created_at)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </section>
           )}
 
@@ -761,20 +1040,133 @@ export default function App() {
           )}
 
           {active === "Reports" && (
-            <section className="panel full-panel">
-              <div className="panel-header">
-                <div>
-                  <h2>Recruitment insights</h2>
-                  <p>Live statistics calculated from the database.</p>
+            <div className="reports-container">
+              <div className="reports-header-panel panel">
+                <div className="panel-header">
+                  <div>
+                    <h2>Recruitment Analytics & Insights</h2>
+                    <p>Live metrics and visual analytics generated from candidates and job openings.</p>
+                  </div>
+                  <div className="panel-actions">
+                    <button className="subtle-button" onClick={handleExportAnalytics} title="Export analytics data as CSV">
+                      <Download size={14} /> Export Summary CSV
+                    </button>
+                    <button className="subtle-button" onClick={loadData}>
+                      <RefreshCw size={15} /> Refresh
+                    </button>
+                  </div>
                 </div>
               </div>
+
               <div className="stat-grid">
-                <StatCard title="Candidates" value={stats.total_candidates} change="Live data" detail="registered" icon={Users} tone="blue" />
-                <StatCard title="Open jobs" value={stats.active_jobs} change="Live data" detail="active postings" icon={BriefcaseBusiness} tone="purple" />
-                <StatCard title="Interviews" value={stats.interviews_scheduled} change="Live data" detail="in interview stage" icon={CalendarDays} tone="orange" />
-                <StatCard title="Hired" value={stats.offers_accepted} change="Live data" detail="hiring completed" icon={CheckCircle2} tone="green" />
+                <StatCard title="Total Candidates" value={candidates.length} change="Live database" detail="registered applicants" icon={Users} tone="blue" />
+                <StatCard title="Average AI Score" value={`${avgScore}%`} change="AI matching" detail="across all resumes" icon={Sparkles} tone="purple" />
+                <StatCard title="Active Job Openings" value={stats.active_jobs} change="Hiring" detail="open positions" icon={BriefcaseBusiness} tone="orange" />
+                <StatCard title="Placement Rate" value={`${hireRate}%`} change="Conversion" detail="hired candidates" icon={CheckCircle2} tone="green" />
               </div>
-            </section>
+
+              <div className="charts-grid">
+                <div className="panel chart-panel">
+                  <div className="chart-header">
+                    <div>
+                      <h3>Hiring Pipeline Funnel</h3>
+                      <p>Candidate distribution across recruitment stages</p>
+                    </div>
+                  </div>
+                  <div className="chart-wrapper">
+                    <ResponsiveContainer width="100%" height={280}>
+                      <BarChart data={stageAnalytics} margin={{ top: 15, right: 15, left: -15, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f1f6" />
+                        <XAxis dataKey="stage" tick={{ fontSize: 11, fill: "#7e8395" }} />
+                        <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "#7e8395" }} />
+                        <Tooltip
+                          contentStyle={{ background: "#ffffff", border: "1px solid #e7e8f0", borderRadius: "8px", fontSize: "11px", boxShadow: "0 4px 12px rgba(0,0,0,0.06)" }}
+                          formatter={(value) => [`${value} candidates`, "Count"]}
+                        />
+                        <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+                          {stageAnalytics.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.fill} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                <div className="panel chart-panel">
+                  <div className="chart-header">
+                    <div>
+                      <h3>Department Load</h3>
+                      <p>Applicant volume distribution across departments</p>
+                    </div>
+                  </div>
+                  <div className="chart-wrapper">
+                    <ResponsiveContainer width="100%" height={280}>
+                      <PieChart>
+                        <Pie
+                          data={departmentData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={60}
+                          outerRadius={95}
+                          paddingAngle={4}
+                          dataKey="value"
+                          nameKey="name"
+                        >
+                          {departmentData.map((entry, index) => (
+                            <Cell key={`dept-${index}`} fill={pieColors[index % pieColors.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          contentStyle={{ background: "#ffffff", border: "1px solid #e7e8f0", borderRadius: "8px", fontSize: "11px", boxShadow: "0 4px 12px rgba(0,0,0,0.06)" }}
+                          formatter={(value) => [`${value} applicants`, "Volume"]}
+                        />
+                        <Legend
+                          iconType="circle"
+                          wrapperStyle={{ fontSize: "11px", color: "#666b7f", paddingTop: "8px" }}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </div>
+
+              <div className="panel chart-panel full-chart-panel">
+                <div className="chart-header">
+                  <div>
+                    <h3>AI Resume Screening Score Distribution</h3>
+                    <p>Candidate density across AI match score brackets</p>
+                  </div>
+                </div>
+                <div className="chart-wrapper">
+                  <ResponsiveContainer width="100%" height={240}>
+                    <AreaChart data={scoreTiersData} margin={{ top: 15, right: 25, left: -15, bottom: 5 }}>
+                      <defs>
+                        <linearGradient id="scoreGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#6258e8" stopOpacity={0.4} />
+                          <stop offset="95%" stopColor="#6258e8" stopOpacity={0.02} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f1f6" />
+                      <XAxis dataKey="tier" tick={{ fontSize: 11, fill: "#7e8395" }} />
+                      <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "#7e8395" }} />
+                      <Tooltip
+                        contentStyle={{ background: "#ffffff", border: "1px solid #e7e8f0", borderRadius: "8px", fontSize: "11px", boxShadow: "0 4px 12px rgba(0,0,0,0.06)" }}
+                        formatter={(value) => [`${value} candidates`, "Applicants"]}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="candidates"
+                        stroke="#6258e8"
+                        strokeWidth={3}
+                        fillOpacity={1}
+                        fill="url(#scoreGradient)"
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
           )}
 
           {showJobForm && (

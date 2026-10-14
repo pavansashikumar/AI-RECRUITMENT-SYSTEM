@@ -1,3 +1,4 @@
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -20,13 +21,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+cors_origins_env = os.getenv("CORS_ORIGINS", "")
+allowed_origins = [
+    origin.strip()
+    for origin in cors_origins_env.split(",")
+    if origin.strip()
+] if cors_origins_env else [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:3000",
+    "http://localhost:80",
+    "http://127.0.0.1:5173",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:5174",
-    ],
-    allow_credentials=False,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
